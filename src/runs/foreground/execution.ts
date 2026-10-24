@@ -107,6 +107,7 @@ import {
 } from "../../watchdog/child-status.ts";
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
 import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
 import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 import { clearProviderRetry, observeProviderDiagnostics, snapshotProviderDiagnostics } from "../../shared/provider-diagnostics.ts";
 
@@ -1435,7 +1436,23 @@ async function runSingleAttempt(
 			try {
 				const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
 				input.signal = startup.signal;
-				const created = await childSessions.create(input);
+				// In-process children re-run every extension factory inside create(); the
+				// PI_SUBAGENT_CHILD bit makes their extensions take the child role. Set it
+				// for the duration of the create await only (a nested try/finally, not the
+				// IIFE's, because that one early-returns at lifecycleFinished and would skip
+				// a catch-level restore) so the parent is never marked and the bit cannot
+				// leak into the child's later run.
+				const childEnvBefore = process.env[SUBAGENT_CHILD_ENV];
+				process.env[SUBAGENT_CHILD_ENV] = "1";
+				let created: ChildSession;
+				try {
+					created = await childSessions.create(input);
+				} finally {
+					// Restore immediately: the child's extension factories ran inside
+					// create(); the parent's later hooks must see its original env.
+					if (childEnvBefore === undefined) delete process.env[SUBAGENT_CHILD_ENV];
+					else process.env[SUBAGENT_CHILD_ENV] = childEnvBefore;
+				}
 				if (lifecycleFinished) {
 					void created.dispose();
 					return;
