@@ -82,6 +82,7 @@ import { retainsChildCommand } from "../shared/child-commands.ts";
 import type { InheritedChildRuntime } from "../shared/child-launch.ts";
 import { buildRunnerChildLaunch } from "./runner-child-launch.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
+import { formatChildExtensionErrors } from "../shared/child-hooks.ts";
 import type { ChildSessionFactory, DefaultChildSessionFactoryOptions } from "../shared/child-session.ts";
 import { runChildSession, type ChildEvent, type RunChildSessionInput, type RunChildSessionResult, type SteerDelivery, type StepSteerHandler } from "./run-child-session.ts";
 import { loadRunnerChildSessionFactory } from "./runner-child-sessions.ts";
@@ -1441,6 +1442,9 @@ export async function runSingleStepInner(
 		saveError: resolvedOutput.saveError,
 	}));
 	outputForSummary = finalizedOutput.displayOutput;
+	// Non-fatal child extension handler failures are surfaced only in the parent-visible output text.
+	const childErrorText = formatChildExtensionErrors(finalResult?.childExtensionErrors);
+	if (childErrorText) outputForSummary = outputForSummary.trim() ? `${outputForSummary}\n\n${childErrorText}` : childErrorText;
 	const acceptance = step.effectiveAcceptance && !finalResult?.stopped && !ctx.timeoutSignal?.aborted && !ctx.stopSignal?.aborted && !ctx.skipAcceptance?.()
 		? await evaluateAcceptance(omitUndefinedProperties({
 			acceptance: step.effectiveAcceptance,

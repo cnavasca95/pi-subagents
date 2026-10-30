@@ -106,7 +106,8 @@ import {
 	type ChildWatchdogStatusEvent,
 } from "../../watchdog/child-status.ts";
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
-import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionExtensionErrorReport } from "../shared/child-session.ts";
+import { formatChildExtensionErrors } from "../shared/child-hooks.ts";
 import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
 import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 import { clearProviderRetry, observeProviderDiagnostics, snapshotProviderDiagnostics } from "../../shared/provider-diagnostics.ts";
@@ -468,6 +469,8 @@ async function runSingleAttempt(
 		...(options.structuredOutput ? { structuredOutputSchema: options.structuredOutput.schema } : {}),
 		...(options.extensionBindings ? { extensionBindings: options.extensionBindings } : {}),
 	});
+	// Child extension-handler failures are non-fatal; the report is surfaced in parent-visible text only.
+	let childExtensionErrors: ChildSessionExtensionErrorReport | undefined;
 	const result: SingleResult = withRunContext({
 		index: options.index ?? 0,
 		agent: agent.name,
@@ -1435,6 +1438,7 @@ async function runSingleAttempt(
 		void (async () => {
 			try {
 				const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
+				childExtensionErrors = input.extensionErrors;
 				input.signal = startup.signal;
 				// In-process children re-run every extension factory inside create(); the
 				// PI_SUBAGENT_CHILD bit makes their extensions take the child role. Set it
@@ -1664,12 +1668,17 @@ async function runSingleAttempt(
 				if (result.outputState === "absent") result.outputState = "unknown";
 			}
 	}
-		artifactOutputByResult.set(result, fullOutput);
+	artifactOutputByResult.set(result, fullOutput);
 		acceptanceOutputByResult.set(result, acceptanceOutput);
 	result.outputMode = options.outputMode ?? "inline";
 	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
 		? result.outputReference.message
 		: fullOutput;
+	// Post-settle extension-handler failures are non-fatal: they reach the parent-visible text only,
+	// never the saved output file, the exit code, or result.error. Appending after finalOutput is
+	// assigned keeps the note visible in file-only mode, where finalOutput is the output reference.
+	const childErrorText = formatChildExtensionErrors(childExtensionErrors);
+	if (childErrorText) result.finalOutput = result.finalOutput.trim() ? `${result.finalOutput}\n\n${childErrorText}` : childErrorText;
 	result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
 	if (options.onUpdate) {
 		const finalText = result.finalOutput || result.error || "(no output)";

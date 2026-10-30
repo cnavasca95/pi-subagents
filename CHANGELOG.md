@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A child's extension handler failures now reach the parent that launched it. Pi routes every extension handler throw to the child session's error reporter, which previously wrote it only to the child's stderr transcript, so a run that looked clean could have silently broken hooks. The reporter now keeps a bounded report (8 distinct entries; duplicates and overflow counted in a `dropped` total) on the launch, and both the foreground and detached runner append it to the parent-visible result text as a `child extension errors:` block. The failures stay non-fatal: exit codes, `result.error`, acceptance, `outputState`, and saved output files are unchanged, and only `bindExtensions` startup failures can still fail a child launch.
+
 ## [0.81.0] - 2026-10-22
 
 ### Highlights

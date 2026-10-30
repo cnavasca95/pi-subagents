@@ -42,6 +42,19 @@ export interface ChildSessionExtensionError {
 	error: unknown;
 }
 
+export interface ChildSessionExtensionErrorEntry {
+	extensionPath: string;
+	event: string;
+	message: string;
+}
+
+export interface ChildSessionExtensionErrorReport {
+	/** Bounded (max 8) list of distinct child extension handler failures. */
+	errors: ChildSessionExtensionErrorEntry[];
+	/** Number of further failures suppressed by the cap or by a duplicate key. */
+	dropped: number;
+}
+
 export interface ChildHookExtension {
 	name: string;
 	factory: (pi: ExtensionAPI) => void;
@@ -98,6 +111,8 @@ export interface ChildSessionLaunch {
 	processEnv?: Record<string, string | undefined>;
 	/** The typed runtime config the hooks were built from; informational for factories. */
 	runtime: ChildRuntimeConfig;
+	/** Mutable report of child extension handler failures, populated by withChildSessionErrorReporting. */
+	extensionErrors?: ChildSessionExtensionErrorReport;
 	onExtensionError?: (error: ChildSessionExtensionError) => void;
 }
 

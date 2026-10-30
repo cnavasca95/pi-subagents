@@ -6,7 +6,7 @@ import registerSubagentFastModeExtension from "./fast-mode-extension.ts";
 import registerSubagentPromptRuntime, { registerSubagentPromptBoundary } from "./subagent-prompt-runtime.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
 import type { ChildToolDiagnostic } from "./tool-availability.ts";
-import type { ChildSessionLaunch } from "./child-session.ts";
+import type { ChildSessionExtensionErrorReport, ChildSessionLaunch } from "./child-session.ts";
 import type { ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { projectRuntimeAcknowledgedExtensions } from "./runtime-acknowledged-extensions.ts";
 
@@ -25,14 +25,42 @@ function ownedProof(hooks: ChildHookExtension[]): PromptProof | undefined {
 	return proof?.factories?.length === hooks.length && proof.factories.every((factory, index) => hooks[index]?.factory === factory) ? proof : undefined;
 }
 
+/** Maximum distinct child extension handler failures kept in the launch's report; the rest are counted as dropped. */
+const MAX_CHILD_EXTENSION_ERRORS = 8;
+
 /** The host's mandatory transcript reporting, owned by the existing hook certificate. */
 export function withChildSessionErrorReporting(session: Omit<ChildSessionLaunch, "onExtensionError">, transcriptWriter: ChildTranscriptWriter | undefined): ChildSessionLaunch {
+	const report: ChildSessionExtensionErrorReport = { errors: [], dropped: 0 };
+	const seen = new Set<string>();
 	const launch: ChildSessionLaunch = { ...session, onExtensionError: (error) => {
-		transcriptWriter?.writeStderrLine(`Extension error (${error.extensionPath}, ${error.event}): ${error.error instanceof Error ? error.error.message : String(error.error)}`);
+		const message = error.error instanceof Error ? error.error.message : String(error.error);
+		transcriptWriter?.writeStderrLine(`Extension error (${error.extensionPath}, ${error.event}): ${message}`);
+		const key = `${error.extensionPath}\u0000${error.event}\u0000${message}`;
+		if (seen.has(key)) {
+			report.dropped += 1;
+		} else if (report.errors.length < MAX_CHILD_EXTENSION_ERRORS) {
+			seen.add(key);
+			report.errors.push({ extensionPath: error.extensionPath, event: error.event, message });
+		} else {
+			report.dropped += 1;
+		}
 	} };
+	launch.extensionErrors = report;
 	const proof = ownedProof(launch.hooks);
 	if (proof?.capture && proof.config === launch.runtime) proof.reporting = { launch, callback: launch.onExtensionError };
 	return launch;
+}
+
+/** Parent-visible summary of child extension handler failures; empty string when there are none. */
+export function formatChildExtensionErrors(report: ChildSessionExtensionErrorReport | undefined): string {
+	if (!report || report.errors.length === 0) return "";
+	const lines = [`child extension errors:`];
+	for (const { extensionPath, event, message } of report.errors) {
+		lines.push(`- ${extensionPath} (${event}): ${message}`);
+	}
+	// `dropped` counts suppressed reports (duplicates and over-cap), not distinct failures.
+	if (report.dropped > 0) lines.push(`(+${report.dropped} more child extension error reports suppressed)`);
+	return lines.join("\n");
 }
 
 export function isReadonlyChildSessionReporting(launch: ChildSessionLaunch): boolean {

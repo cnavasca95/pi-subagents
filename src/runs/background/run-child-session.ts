@@ -26,7 +26,7 @@ import { isMutatingTool, resolveCurrentPath } from "../shared/long-running-guard
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { createReportedChildSessionInput, type InProcessChildLaunch } from "../shared/child-launch.ts";
 import { createPartialOutputTracker, formatPartialOutput, type PartialOutputCause } from "../shared/partial-output.ts";
-import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionFactory } from "../shared/child-session.ts";
+import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionFactory, type ChildSessionExtensionErrorReport } from "../shared/child-session.ts";
 import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 import { isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { STRUCTURED_OUTPUT_FOLLOW_UP } from "../shared/structured-output.ts";
@@ -140,6 +140,8 @@ export interface RunChildSessionResult {
 	structuredOutput?: unknown;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
 	effects?: EffectsProjection;
+	/** Post-settle child extension handler failures; non-fatal, surfaced in parent-visible output only. */
+	childExtensionErrors?: ChildSessionExtensionErrorReport;
 }
 
 /** Events the child emits while the model streams; not persisted into the diagnostic log. */
@@ -191,6 +193,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		let currentPath: string | undefined;
 		let toolCount = 0;
 		let session: ChildSession | undefined;
+		let childExtensionErrors: ChildSessionExtensionErrorReport | undefined;
 		let messageBaseline: number | undefined;
 		const acceptedSteers: Array<{ request: SteerRequest; text: string }> = [];
 		let unsubscribe: (() => void) | undefined;
@@ -646,6 +649,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					currentToolArgs,
 					currentPath,
 					afterCompactionSettlement: afterCompactionSettlement || undefined,
+					childExtensionErrors: childExtensionErrors?.errors.length ? childExtensionErrors : undefined,
 				});
 				resolve(result);
 			});
@@ -669,6 +673,9 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		void (async () => {
 			try {
 				const createInput = createReportedChildSessionInput(input.launch, input.transcriptWriter);
+				// The report object is mutable; extension handler failures pi reports during the run
+				// land here and are read again when the run settles, so the reference survives.
+				childExtensionErrors = createInput.extensionErrors;
 				createInput.signal = startup.signal;
 				const created = await input.factory.create(createInput);
 				if (settled) {
